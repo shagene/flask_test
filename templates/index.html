@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YGO Spreadsheet Maker!</title>
+    <!-- Link Google Fonts -->
+<!-- Link Google Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@100..1000&display=swap" rel="stylesheet">
+    <style>
+/* Global Styling */
+
+        body {
+            font-family: 'Afacad Flux', sans-serif;
+            background: #202124;
+            margin: 20px;
+            padding: 0;
+            color: #F1F1F1;
+            line-height: 1.6;
+        }
+        #steps {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin-top: 20px; /* Adjust this value for more space */
+        }
+
+        #searchInput {
+            width: 100%; /* Allows it to adjust with the screen size */
+            padding: 10px;
+            font-size: 18px;
+            background: #202124;
+            color: #F1F1F1;
+            border: 1px solid #F1F1F1;
+            border-radius: 8px;
+            margin-bottom: 5px;
+            box-sizing: border-box; /* Ensures padding and border are included in the width */
+        }
+
+
+        .step-container {
+            border: 2px solid #3C3D40;
+            border-radius: 8px;
+            padding: 10px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .selected-step {
+            border: 1.5px solid #F1F1F1;
+        }
+            .selected-stepe:hover {
+        border-color: #f9f9f9;
+        box-shadow: 0 0 15px rgba(249, 249, 249, 0.8);
+        transform: scale(1.2);
+    }
+
+        .card-item {
+            display: inline-block;
+            margin: 5px;
+            text-align: center;
+        }
+
+        .delete-button {
+            cursor: pointer;
+            margin: 0 5px;
+            background-color: #202124;
+            color: #F1F1F1;
+        }
+
+        .move-button {
+            cursor: pointer;
+            margin: 0 5px;
+            background-color: #202124;
+            color: #F1F1F1;
+
+        }
+
+        .step-title-container {
+            text-align: left;
+            margin-bottom: 10px;
+        }
+
+        .step-title {
+            border: none;
+            outline: none;
+            font-size: 18px;
+            font-weight: 300;
+            width: 100%;
+        }
+
+        .step-controls {
+            margin-top: auto;
+            border-top: 1px solid #F1F1F1;
+            padding-top: 10px;
+        }
+
+        #results {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: flex-start;
+            max-height: 480px;
+            min-height: 150px;
+            overflow-y: auto;
+            border: 1px solid #F1F1F1;
+            border-radius: 8px;
+            padding: 10px;
+            margin-top: 20px; /* Adjust this value for more space */
+        }
+
+        .card-item img {
+            width: 100px;
+            height: auto;
+            display: block;
+        }
+
+        .card-item div {
+            margin-top: 10px;
+        }
+    </style>
+    <script>
+        let steps = [];
+        let selectedStepIndex = null;
+        let debounceTimeout;
+
+        function createStep() {
+            const step = { cards: [], note: "" };
+            steps.push(step);
+            renderSteps();
+        }
+
+        function debounce(func, delay) {
+            clearTimeout(debounceTimeout);
+            debounceTimeout = setTimeout(func, delay);
+        }
+
+        async function searchCards() {
+            debounce(async () => {
+                const query = document.getElementById('searchInput').value;
+                if (!query.trim()) return;
+                const response = await fetch(`/search?query=${query}`);
+                const cards = await response.json();
+                const resultsDiv = document.getElementById('results');
+                resultsDiv.innerHTML = '';
+                cards.forEach(card => {
+                    const cardElement = document.createElement('div');
+                    cardElement.classList.add('card-item');
+                    cardElement.innerHTML = `
+                        <img src="/static/card_images/${card.id}.jpg" alt="${card.name}">
+                    `;
+                    cardElement.onclick = () => addCardToStep(card.id, card.name);
+                    resultsDiv.appendChild(cardElement);
+                });
+            }, 600); 
+        }
+
+        async function addCardToStep(cardId, cardName) {
+            if (selectedStepIndex === null) {
+                alert("Please select a step first!");
+                return;
+            }
+            steps[selectedStepIndex].cards.push({
+                name: cardName,
+                image_url: `/static/card_images/${cardId}.jpg`
+            });
+            renderSteps();
+        }
+
+        function updateStepTitle(stepIndex, event) {
+            steps[stepIndex].note = event.target.innerText;
+        }
+
+        function deleteCard(stepIndex, cardIndex) {
+            steps[stepIndex].cards.splice(cardIndex, 1);
+            renderSteps();
+        }
+
+        function deleteStep(stepIndex) {
+            steps.splice(stepIndex, 1);
+            if (selectedStepIndex === stepIndex) selectedStepIndex = null;
+            renderSteps();
+        }
+
+        function moveStepLeft(stepIndex) {
+            if (stepIndex > 0) {
+                [steps[stepIndex], steps[stepIndex - 1]] = [steps[stepIndex - 1], steps[stepIndex]];
+                renderSteps();
+            }
+        }
+
+        function moveStepRight(stepIndex) {
+            if (stepIndex < steps.length - 1) {
+                [steps[stepIndex], steps[stepIndex + 1]] = [steps[stepIndex + 1], steps[stepIndex]];
+                renderSteps();
+            }
+        }
+
+        function moveCardLeft(stepIndex, cardIndex) {
+            if (cardIndex > 0) {
+                [steps[stepIndex].cards[cardIndex], steps[stepIndex].cards[cardIndex - 1]] =
+                    [steps[stepIndex].cards[cardIndex - 1], steps[stepIndex].cards[cardIndex]];
+                renderSteps();
+            }
+        }
+
+        function moveCardRight(stepIndex, cardIndex) {
+            if (cardIndex < steps[stepIndex].cards.length - 1) {
+                [steps[stepIndex].cards[cardIndex], steps[stepIndex].cards[cardIndex + 1]] =
+                    [steps[stepIndex].cards[cardIndex + 1], steps[stepIndex].cards[cardIndex]];
+                renderSteps();
+            }
+        }
+
+        function selectStep(stepIndex) {
+            selectedStepIndex = stepIndex;
+            renderSteps();
+        }
+
+        function duplicateStep(stepIndex) {
+            const duplicatedStep = JSON.parse(JSON.stringify(steps[stepIndex]));
+            steps.splice(stepIndex + 1, 0, duplicatedStep);
+            renderSteps();
+        }
+
+        function renderSteps() {
+            const stepsDiv = document.getElementById('steps');
+            stepsDiv.innerHTML = '';
+            steps.forEach((step, index) => {
+                let stepClass = index === selectedStepIndex ? 'step-container selected-step' : 'step-container';
+
+                let stepHTML = `
+                    <div class="${stepClass}" onclick="selectStep(${index})">
+                        <div class="step-title-container">
+                            <h3>Step ${index + 1}</h3>
+                            <div 
+                                class="step-title" 
+                                contenteditable="true"
+                                oninput="updateStepTitle(${index}, event)" 
+                                onclick="event.stopPropagation();">
+                                ${step.note || 'Click to add title...'}
+                            </div>
+                        </div>
+                        <div class="card-list">`;
+
+                step.cards.forEach((card, cardIndex) => {
+                    stepHTML += `
+                        <div class="card-item">
+                            <img src="${card.image_url}" alt="${card.name}" width="100">
+                            <div>
+                                <span class="move-button" onclick="moveCardLeft(${index}, ${cardIndex})">⇦</span>
+                                <span class="move-button" onclick="moveCardRight(${index}, ${cardIndex})">⇨</span>
+                                <span class="delete-button" onclick="deleteCard(${index}, ${cardIndex})">✖</span>
+                            </div>
+                        </div>`;
+                });
+
+                stepHTML += `
+                        </div>
+                        <div class="step-controls">
+                            <span class="move-button" onclick="moveStepLeft(${index})">Move Above</span>
+                            <span class="move-button" onclick="moveStepRight(${index})">Move Below</span>
+                            <span class="move-button" onclick="duplicateStep(${index})">Duplicate</span>
+                            <span class="move-button" onclick="deleteStep(${index})">Delete</span>
+                        </div>
+                    </div>`;
+                stepsDiv.innerHTML += stepHTML;
+            });
+        }
+
+        function printSteps() {
+    const originalResults = document.getElementById('results');
+    const bodyElement = document.body;
+
+    // Change text to black for printing
+    bodyElement.style.color = "#000";
+    originalResults.style.display = 'none';
+
+    // Trigger print
+    window.print();
+
+    // Revert back to original text color
+    bodyElement.style.color = "#F1F1F1";
+    originalResults.style.display = 'flex';
+}
+
+        function exportSteps() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(steps, null, 2));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", "combo_steps.json");
+            downloadAnchor.click();
+        }
+
+        function importSteps(event) {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                steps = JSON.parse(e.target.result);
+                renderSteps();
+            };
+            reader.readAsText(file);
+        }
+
+    </script>
+</head>
+<body>
+    <h1 style="text-align: center;">YGO Spreadsheet Maker</h1>
+    <input type="text" id="searchInput" onkeyup="searchCards()" placeholder="Search for a card...">
+    <div id="results"></div>
+    <hr>
+    <button onclick="createStep()">➕ Add Step</button>
+    <button onclick="printSteps()">🖨️ Export Combo Line</button>
+    <button onclick="exportSteps()">💾 Save Steps</button>
+    <input type="file" onchange="importSteps(event)">
+    <div id="steps"></div>
+</body>
+</html>
