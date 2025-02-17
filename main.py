@@ -1,3 +1,25 @@
+"""
+YuGiOh Card Database and Search Application
+
+This application provides a web interface to search and view YuGiOh cards. It fetches card data
+from the YGOPRODeck API (https://db.ygoprodeck.com/api/v7/cardinfo.php) and stores it in an
+in-memory SQLite database for fast searching. The application is designed to work with multiple
+workers in a production environment (e.g., Gunicorn) by using SQLite's shared memory mode.
+
+Key Features:
+- Real-time card search with name and description matching
+- Card image viewing and caching
+- Progress tracking during database initialization
+- Error handling and status reporting
+- Multi-worker support using SQLite shared memory
+
+Dependencies:
+- Flask: Web framework
+- SQLite3: Database backend (in shared memory mode)
+- Requests: For API calls
+- Threading: For thread-safe operations
+"""
+
 import sqlite3
 import os
 import requests
@@ -9,44 +31,65 @@ from io import BytesIO
 from datetime import datetime
 import logging
 
-# Configure logging
+# Configure logging to track application behavior and errors
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Use shared memory for SQLite
+# Use shared memory SQLite for multi-worker support
+# This allows all Gunicorn workers to access the same database
 DB_URI = "file:cards_db?mode=memory&cache=shared"
-image_cache = {}  # Cache for card images
-db_lock = Lock()  # Lock for database operations
-initialized = False
+image_cache = {}  # In-memory cache for card images
+db_lock = Lock()  # Thread-safe lock for database operations
+initialized = False  # Flag to track if database has been initialized
 
 app = Flask(__name__)
 
-# Add global status tracking
+# Global status tracking for database initialization
+# This helps provide feedback to users during the initialization process
 db_status = {
-    "state": "not_started",
-    "total_cards": 0,
-    "current_card": 0,
-    "message": "Database not initialized",
-    "progress": 0,
-    "error": None,
-    "last_updated": None
+    "state": "not_started",  # States: not_started, initializing, updating, ready, error
+    "total_cards": 0,        # Total number of cards to process
+    "current_card": 0,       # Number of cards processed
+    "message": "Database not initialized",  # User-friendly status message
+    "progress": 0,           # Progress percentage (0-100)
+    "error": None,           # Error message if something goes wrong
+    "last_updated": None     # Timestamp of last update
 }
 
 def get_db():
+    """
+    Get a database connection for the current request.
+    Uses Flask's application context to ensure each request gets its own connection.
+    Connections are automatically closed when the request ends.
+    """
     if 'db' not in g:
         g.db = sqlite3.connect(DB_URI, uri=True)
     return g.db
 
 @app.teardown_appcontext
 def close_db(error):
+    """
+    Close the database connection when the request ends.
+    This prevents connection leaks and ensures proper cleanup.
+    """
     if 'db' in g:
         g.db.close()
 
 def initialize_database():
+    """
+    Initialize the SQLite database and populate it with card data from the YGOPRODeck API.
+    This function:
+    1. Creates the cards table if it doesn't exist
+    2. Fetches card data from the API
+    3. Processes cards in batches for better performance
+    4. Updates status and progress for the frontend
+    
+    The function is thread-safe and will only initialize once, even with multiple workers.
+    """
     global db_status, initialized
     try:
         logger.info("Starting database initialization...")
-        with db_lock:  # Use lock to prevent multiple initializations
+        with db_lock:  # Ensure only one worker initializes the database
             if initialized:
                 logger.info("Database already initialized")
                 return
@@ -60,11 +103,12 @@ def initialize_database():
             
             # Create shared memory database connection
             logger.info("Creating database connection...")
-            # Create an initial connection to keep the shared memory alive
+            # Keep-alive connection prevents the shared memory from being cleared
             keep_alive_conn = sqlite3.connect(DB_URI, uri=True)
             conn = sqlite3.connect(DB_URI, uri=True)
             cursor = conn.cursor()
             
+            # Create the cards table with all necessary fields
             logger.info("Creating tables...")
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS cards (
@@ -78,7 +122,7 @@ def initialize_database():
             ''')
             conn.commit()
             
-            # Update database with card data
+            # Fetch card data from the YGOPRODeck API
             logger.info("Fetching card data from API...")
             db_status.update({
                 "state": "updating",
@@ -101,7 +145,7 @@ def initialize_database():
                 "progress": 20
             })
             
-            # Process cards in smaller batches for better progress updates
+            # Process cards in batches for better performance and progress updates
             batch_size = 100
             for i in range(0, len(cards), batch_size):
                 batch = cards[i:i+batch_size]
@@ -113,6 +157,7 @@ def initialize_database():
                         "progress": progress
                     })
                     
+                    # Store complete card data as JSON for flexibility
                     card_data = json.dumps(card)
                     image_url = card['card_images'][0]['image_url']
                     
@@ -143,6 +188,10 @@ def initialize_database():
         })
 
 class DatabaseInitMiddleware:
+    """
+    WSGI middleware that ensures the database is initialized before handling any requests.
+    This replaces the deprecated @app.before_first_request decorator and works with multiple workers.
+    """
     def __init__(self, app):
         self.app = app
         self._db_initialized = False
@@ -154,18 +203,32 @@ class DatabaseInitMiddleware:
             self._db_initialized = True
         return self.app(environ, start_response)
 
+# Apply the database initialization middleware
 app.wsgi_app = DatabaseInitMiddleware(app.wsgi_app)
 
 @app.route('/db-status')
 def get_db_status():
+    """Return the current database initialization status."""
     return jsonify(db_status)
 
 @app.route('/')
 def index():
+    """Render the main page with the current database status."""
     return render_template("index.html", db_status=db_status)
 
 @app.route('/search')
 def search():
+    """
+    Search for cards by name or description.
+    Returns a JSON array of matching cards.
+    
+    Query Parameters:
+    - query: The search term to look for in card names and descriptions
+    
+    Returns:
+    - 503: If the database is not ready
+    - 200: JSON array of matching cards
+    """
     if db_status["state"] != "ready":
         return jsonify({
             "error": "Database is not ready yet",
@@ -190,6 +253,18 @@ def search():
 
 @app.route('/card/<int:card_id>')
 def get_card_image(card_id):
+    """
+    Retrieve a card's image by its ID.
+    Images are cached in memory after first request.
+    
+    Parameters:
+    - card_id: The ID of the card to retrieve
+    
+    Returns:
+    - 503: If the database is not ready
+    - 404: If the card or image is not found
+    - 200: The card image file
+    """
     if db_status["state"] != "ready":
         return jsonify({"error": "Database not ready"}), 503
         
@@ -221,6 +296,6 @@ def get_card_image(card_id):
     return "Image not found", 404
 
 if __name__ == "__main__":
-    # Get port from environment variable with fallback to 5000
+    # When running directly (not through Gunicorn)
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
