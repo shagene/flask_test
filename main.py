@@ -7,8 +7,13 @@ import json
 from threading import Thread
 from io import BytesIO
 from datetime import datetime
+import logging
 
-# Use in-memory database for free tier
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Use in-memory database for free tier with shared connection
 DB_PATH = ":memory:"
 image_cache = {}  # Cache for card images
 
@@ -16,18 +21,20 @@ app = Flask(__name__)
 
 # Add global status tracking
 db_status = {
-    "state": "not_started",  # not_started, initializing, updating, ready, error
+    "state": "not_started",
     "total_cards": 0,
     "current_card": 0,
     "message": "Database not initialized",
-    "progress": 0,  # Progress percentage
-    "error": None,  # Error message if any
-    "last_updated": None  # Timestamp of last update
+    "progress": 0,
+    "error": None,
+    "last_updated": None
 }
 
 def initialize_database():
     global db_status
     try:
+        logger.info("Starting database initialization...")
+        
         db_status.update({
             "state": "initializing",
             "message": "Initializing database...",
@@ -36,8 +43,11 @@ def initialize_database():
         })
         
         # Create in-memory database
+        logger.info("Creating database connection...")
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        
+        logger.info("Creating tables...")
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS cards (
                 id INTEGER PRIMARY KEY,
@@ -51,6 +61,7 @@ def initialize_database():
         conn.commit()
         
         # Update database with card data
+        logger.info("Fetching card data from API...")
         db_status.update({
             "state": "updating",
             "message": "Fetching card data from API...",
@@ -65,6 +76,7 @@ def initialize_database():
         if not cards:
             raise Exception("No card data received from API")
             
+        logger.info(f"Received {len(cards)} cards from API")
         db_status.update({
             "total_cards": len(cards),
             "message": f"Processing {len(cards)} cards...",
@@ -92,8 +104,10 @@ def initialize_database():
                 ''', (card['id'], card['name'], card['type'], card['desc'], card_data, image_url))
             
             conn.commit()
+            logger.info(f"Processed batch of {len(batch)} cards. Total progress: {progress}%")
         
         conn.close()
+        logger.info("Database initialization completed successfully")
         db_status.update({
             "state": "ready",
             "message": f"Database ready with {db_status['total_cards']} cards",
@@ -103,13 +117,16 @@ def initialize_database():
         
     except Exception as e:
         error_msg = str(e)
-        print(f"Error during initialization: {error_msg}")
+        logger.error(f"Error during initialization: {error_msg}", exc_info=True)
         db_status.update({
             "state": "error",
             "message": "Failed to initialize database",
             "error": error_msg
         })
-        
+
+# Initialize database when the module loads
+initialize_database()
+
 @app.route('/db-status')
 def get_db_status():
     return jsonify(db_status)
@@ -178,9 +195,6 @@ def get_card_image(card_id):
     return "Image not found", 404
 
 if __name__ == "__main__":
-    # Start database initialization in background
-    Thread(target=initialize_database, daemon=True).start()
-    
     # Get port from environment variable with fallback to 5000
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)

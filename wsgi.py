@@ -1,8 +1,4 @@
-from main import app, initialize_database
-from threading import Thread
+from main import app
 
-# Initialize database in background
-Thread(target=initialize_database, daemon=True).start()
-
-# Export the Flask application
+# The database is now initialized when the main module is imported
 application = app
