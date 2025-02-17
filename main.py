@@ -135,5 +135,7 @@ if __name__ == "__main__":
     # Start database initialization in background
     Thread(target=init_db_async, daemon=True).start()
     
+    # Get port from environment variable with fallback to 10000
     port = int(os.environ.get("PORT", 10000))
+    # Explicitly bind to 0.0.0.0 to accept all incoming connections
     app.run(host='0.0.0.0', port=port)
