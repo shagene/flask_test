@@ -3,12 +3,11 @@
 <head>
     <title>YGO Spreadsheet Maker!</title>
     <!-- Link Google Fonts -->
-<!-- Link Google Fonts -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@100..1000&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@100..1000&display=swap" rel="stylesheet">
     <style>
-/* Global Styling */
+        /* Global Styling */
 
         body {
             font-family: 'Afacad Flux', sans-serif;
@@ -49,11 +48,11 @@
         .selected-step {
             border: 1.5px solid #F1F1F1;
         }
-            .selected-stepe:hover {
-        border-color: #f9f9f9;
-        box-shadow: 0 0 15px rgba(249, 249, 249, 0.8);
-        transform: scale(1.2);
-    }
+        .selected-step:hover {
+            border-color: #f9f9f9;
+            box-shadow: 0 0 15px rgba(249, 249, 249, 0.8);
+            transform: scale(1.2);
+        }
 
         .card-item {
             display: inline-block;
@@ -118,11 +117,91 @@
         .card-item div {
             margin-top: 10px;
         }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            z-index: 1000;
+        }
+        .loading-overlay.hidden {
+            display: none;
+        }
+        .progress-bar {
+            width: 300px;
+            height: 20px;
+            background: #333;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: #4CAF50;
+            transition: width 0.3s ease;
+        }
+        .error-message {
+            color: #ff6b6b;
+            margin-top: 10px;
+            text-align: center;
+        }
+        .loading-message {
+            margin: 10px 0;
+            text-align: center;
+        }
+        .retry-button {
+            padding: 10px 20px;
+            background: #4CAF50;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            cursor: pointer;
+            margin-top: 15px;
+            display: none;
+        }
+        .retry-button:hover {
+            background: #45a049;
+        }
     </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <h2>Loading YuGiOh Card Database</h2>
+        <div class="progress-bar">
+            <div id="progressBarFill" class="progress-bar-fill" style="width: 0%"></div>
+        </div>
+        <div id="loadingMessage" class="loading-message">Initializing...</div>
+        <div id="errorMessage" class="error-message"></div>
+        <button id="retryButton" class="retry-button" onclick="window.location.reload()">Retry</button>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent" style="display: none;">
+        <h1 style="text-align: center;">YGO Spreadsheet Maker</h1>
+        <input type="text" id="searchInput" onkeyup="searchCards()" placeholder="Search for a card...">
+        <div id="results"></div>
+        <hr>
+        <button onclick="createStep()">➕ Add Step</button>
+        <button onclick="printSteps()">🖨️ Export Combo Line</button>
+        <button onclick="exportSteps()">💾 Save Steps</button>
+        <input type="file" onchange="importSteps(event)">
+        <div id="steps"></div>
+    </div>
+
     <script>
         let steps = [];
         let selectedStepIndex = null;
         let debounceTimeout;
+        let lastProgress = 0;
 
         function createStep() {
             const step = { cards: [], note: "" };
@@ -161,8 +240,43 @@
                 });
         }
 
+        function updateStatus() {
+            fetch('/db-status')
+                .then(response => response.json())
+                .then(status => {
+                    const loadingOverlay = document.getElementById('loadingOverlay');
+                    const mainContent = document.getElementById('mainContent');
+                    const progressBarFill = document.getElementById('progressBarFill');
+                    const loadingMessage = document.getElementById('loadingMessage');
+                    const errorMessage = document.getElementById('errorMessage');
+                    const retryButton = document.getElementById('retryButton');
+
+                    // Smooth progress bar
+                    lastProgress = Math.max(lastProgress, status.progress || 0);
+                    progressBarFill.style.width = `${lastProgress}%`;
+                    loadingMessage.textContent = status.message;
+
+                    if (status.state === 'ready') {
+                        loadingOverlay.classList.add('hidden');
+                        mainContent.style.display = 'block';
+                    } else if (status.state === 'error') {
+                        errorMessage.textContent = status.error || 'An error occurred while loading the database';
+                        retryButton.style.display = 'block';
+                        progressBarFill.style.background = '#ff6b6b';
+                    } else {
+                        setTimeout(updateStatus, 1000);
+                    }
+                })
+                .catch(error => {
+                    const errorMessage = document.getElementById('errorMessage');
+                    const retryButton = document.getElementById('retryButton');
+                    errorMessage.textContent = 'Failed to connect to server';
+                    retryButton.style.display = 'block';
+                });
+        }
+
         // Start checking status when page loads
-        document.addEventListener('DOMContentLoaded', checkDatabaseStatus);
+        document.addEventListener('DOMContentLoaded', updateStatus);
 
         async function searchCards() {
             debounce(async () => {
@@ -304,20 +418,20 @@
         }
 
         function printSteps() {
-    const originalResults = document.getElementById('results');
-    const bodyElement = document.body;
+            const originalResults = document.getElementById('results');
+            const bodyElement = document.body;
 
-    // Change text to black for printing
-    bodyElement.style.color = "#000";
-    originalResults.style.display = 'none';
+            // Change text to black for printing
+            bodyElement.style.color = "#000";
+            originalResults.style.display = 'none';
 
-    // Trigger print
-    window.print();
+            // Trigger print
+            window.print();
 
-    // Revert back to original text color
-    bodyElement.style.color = "#F1F1F1";
-    originalResults.style.display = 'flex';
-}
+            // Revert back to original text color
+            bodyElement.style.color = "#F1F1F1";
+            originalResults.style.display = 'flex';
+        }
 
         function exportSteps() {
             const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(steps, null, 2));
@@ -336,50 +450,6 @@
             };
             reader.readAsText(file);
         }
-
     </script>
-</head>
-<body>
-    <h1 style="text-align: center;">YGO Spreadsheet Maker</h1>
-    <input type="text" id="searchInput" onkeyup="searchCards()" placeholder="Search for a card...">
-    <div id="results"></div>
-    <hr>
-    <button onclick="createStep()">➕ Add Step</button>
-    <button onclick="printSteps()">🖨️ Export Combo Line</button>
-    <button onclick="exportSteps()">💾 Save Steps</button>
-    <input type="file" onchange="importSteps(event)">
-    <div id="steps"></div>
-    <div id="loading-overlay" style="
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.9);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        z-index: 1000;
-        color: #F1F1F1;
-    ">
-        <div style="text-align: center;">
-            <h2 id="loading-status" style="margin-bottom: 20px;">Initializing Database...</h2>
-            <div id="loading-progress" style="
-                width: 300px;
-                height: 4px;
-                background: #3C3D40;
-                border-radius: 2px;
-                overflow: hidden;
-            ">
-                <div id="progress-bar" style="
-                    width: 0%;
-                    height: 100%;
-                    background: #F1F1F1;
-                    transition: width 0.3s ease;
-                "></div>
-            </div>
-        </div>
-    </div>
 </body>
 </html>
