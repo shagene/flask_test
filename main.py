@@ -142,9 +142,19 @@ def initialize_database():
             "error": error_msg
         })
 
-@app.before_first_request
-def init_db():
-    initialize_database()
+class DatabaseInitMiddleware:
+    def __init__(self, app):
+        self.app = app
+        self._db_initialized = False
+
+    def __call__(self, environ, start_response):
+        if not self._db_initialized:
+            with app.app_context():
+                initialize_database()
+            self._db_initialized = True
+        return self.app(environ, start_response)
+
+app.wsgi_app = DatabaseInitMiddleware(app.wsgi_app)
 
 @app.route('/db-status')
 def get_db_status():
