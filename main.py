@@ -6,8 +6,11 @@ from flask import Flask, render_template, request, jsonify
 import json
 from threading import Thread
 
-DB_PATH = "yugioh_cards.db"
-IMAGES_DIR = "static/card_images"
+# Use persistent storage directory on Render
+PERSISTENT_DIR = os.environ.get('PERSISTENT_DIR', '.')
+DB_PATH = os.path.join(PERSISTENT_DIR, "yugioh_cards.db")
+IMAGES_DIR = os.path.join(PERSISTENT_DIR, "static/card_images")
+
 app = Flask(__name__)
 
 # Add global status tracking
@@ -103,19 +106,28 @@ def index():
 @app.route('/search')
 def search():
     if db_status["state"] != "ready":
-        return jsonify({"error": "Database not ready"}), 503
-    
-    query = request.args.get('query')
+        return jsonify({
+            "error": "Database is not ready yet",
+            "status": db_status["state"],
+            "message": db_status["message"]
+        }), 503
+        
+    query = request.args.get('query', '').strip()
+    if not query:
+        return jsonify([])
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT DISTINCT name, id
-        FROM cards 
+        SELECT card_data FROM cards 
         WHERE name LIKE ? OR desc LIKE ?
-    """, ('%' + query + '%', '%' + query + '%'))
-    cards = cursor.fetchall()
+    """, (f'%{query}%', f'%{query}%'))
+    
+    results = cursor.fetchall()
     conn.close()
-    return jsonify([{"name": card[0], "id": card[1]} for card in cards])
+    
+    cards = [json.loads(row[0]) for row in results]
+    return jsonify(cards)
 
 @app.route('/card/<int:card_id>')
 def get_card_image(card_id):
@@ -135,7 +147,6 @@ if __name__ == "__main__":
     # Start database initialization in background
     Thread(target=init_db_async, daemon=True).start()
     
-    # Get port from environment variable with fallback to 10000
-    port = int(os.environ.get("PORT", 10000))
-    # Explicitly bind to 0.0.0.0 to accept all incoming connections
+    # Get port from environment variable with fallback to 5000
+    port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
