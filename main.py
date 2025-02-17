@@ -105,5 +105,5 @@ if __name__ == "__main__":
     update_database()
     download_card_images()
     # Use PORT provided by Render
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
