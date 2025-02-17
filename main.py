@@ -2,9 +2,9 @@ import sqlite3
 import os
 import requests
 from tqdm import tqdm
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, g
 import json
-from threading import Thread
+from threading import Thread, Lock
 from io import BytesIO
 from datetime import datetime
 import logging
@@ -13,9 +13,11 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Use in-memory database for free tier with shared connection
-DB_PATH = ":memory:"
+# Use shared memory for SQLite
+DB_URI = "file:cards_db?mode=memory&cache=shared"
 image_cache = {}  # Cache for card images
+db_lock = Lock()  # Lock for database operations
+initialized = False
 
 app = Flask(__name__)
 
@@ -30,91 +32,107 @@ db_status = {
     "last_updated": None
 }
 
+def get_db():
+    if 'db' not in g:
+        g.db = sqlite3.connect(DB_URI, uri=True)
+    return g.db
+
+@app.teardown_appcontext
+def close_db(error):
+    if 'db' in g:
+        g.db.close()
+
 def initialize_database():
-    global db_status
+    global db_status, initialized
     try:
         logger.info("Starting database initialization...")
-        
-        db_status.update({
-            "state": "initializing",
-            "message": "Initializing database...",
-            "progress": 0,
-            "error": None
-        })
-        
-        # Create in-memory database
-        logger.info("Creating database connection...")
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        logger.info("Creating tables...")
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS cards (
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                type TEXT,
-                desc TEXT,
-                card_data TEXT,
-                image_url TEXT
-            )
-        ''')
-        conn.commit()
-        
-        # Update database with card data
-        logger.info("Fetching card data from API...")
-        db_status.update({
-            "state": "updating",
-            "message": "Fetching card data from API...",
-            "progress": 10
-        })
-        
-        response = requests.get('https://db.ygoprodeck.com/api/v7/cardinfo.php', timeout=30)
-        if response.status_code != 200:
-            raise Exception(f"API returned status code {response.status_code}")
-            
-        cards = response.json().get('data', [])
-        if not cards:
-            raise Exception("No card data received from API")
-            
-        logger.info(f"Received {len(cards)} cards from API")
-        db_status.update({
-            "total_cards": len(cards),
-            "message": f"Processing {len(cards)} cards...",
-            "progress": 20
-        })
-        
-        # Process cards in smaller batches for better progress updates
-        batch_size = 100
-        for i in range(0, len(cards), batch_size):
-            batch = cards[i:i+batch_size]
-            for card in batch:
-                db_status["current_card"] += 1
-                progress = min(90, 20 + (70 * db_status["current_card"] // len(cards)))
-                db_status.update({
-                    "message": f"Processing cards ({db_status['current_card']}/{db_status['total_cards']})",
-                    "progress": progress
-                })
+        with db_lock:  # Use lock to prevent multiple initializations
+            if initialized:
+                logger.info("Database already initialized")
+                return
                 
-                card_data = json.dumps(card)
-                image_url = card['card_images'][0]['image_url']
-                
-                cursor.execute('''
-                    INSERT INTO cards (id, name, type, desc, card_data, image_url)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (card['id'], card['name'], card['type'], card['desc'], card_data, image_url))
+            db_status.update({
+                "state": "initializing",
+                "message": "Initializing database...",
+                "progress": 0,
+                "error": None
+            })
             
+            # Create shared memory database connection
+            logger.info("Creating database connection...")
+            # Create an initial connection to keep the shared memory alive
+            keep_alive_conn = sqlite3.connect(DB_URI, uri=True)
+            conn = sqlite3.connect(DB_URI, uri=True)
+            cursor = conn.cursor()
+            
+            logger.info("Creating tables...")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS cards (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    type TEXT,
+                    desc TEXT,
+                    card_data TEXT,
+                    image_url TEXT
+                )
+            ''')
             conn.commit()
-            logger.info(f"Processed batch of {len(batch)} cards. Total progress: {progress}%")
-        
-        conn.close()
-        logger.info("Database initialization completed successfully")
-        db_status.update({
-            "state": "ready",
-            "message": f"Database ready with {db_status['total_cards']} cards",
-            "progress": 100,
-            "last_updated": datetime.now().isoformat()
-        })
-        
+            
+            # Update database with card data
+            logger.info("Fetching card data from API...")
+            db_status.update({
+                "state": "updating",
+                "message": "Fetching card data from API...",
+                "progress": 10
+            })
+            
+            response = requests.get('https://db.ygoprodeck.com/api/v7/cardinfo.php', timeout=30)
+            if response.status_code != 200:
+                raise Exception(f"API returned status code {response.status_code}")
+                
+            cards = response.json().get('data', [])
+            if not cards:
+                raise Exception("No card data received from API")
+                
+            logger.info(f"Received {len(cards)} cards from API")
+            db_status.update({
+                "total_cards": len(cards),
+                "message": f"Processing {len(cards)} cards...",
+                "progress": 20
+            })
+            
+            # Process cards in smaller batches for better progress updates
+            batch_size = 100
+            for i in range(0, len(cards), batch_size):
+                batch = cards[i:i+batch_size]
+                for card in batch:
+                    db_status["current_card"] += 1
+                    progress = min(90, 20 + (70 * db_status["current_card"] // len(cards)))
+                    db_status.update({
+                        "message": f"Processing cards ({db_status['current_card']}/{db_status['total_cards']})",
+                        "progress": progress
+                    })
+                    
+                    card_data = json.dumps(card)
+                    image_url = card['card_images'][0]['image_url']
+                    
+                    cursor.execute('''
+                        INSERT INTO cards (id, name, type, desc, card_data, image_url)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (card['id'], card['name'], card['type'], card['desc'], card_data, image_url))
+                
+                conn.commit()
+                logger.info(f"Processed batch of {len(batch)} cards. Total progress: {progress}%")
+            
+            initialized = True
+            logger.info("Database initialization completed successfully")
+            db_status.update({
+                "state": "ready",
+                "message": f"Database ready with {db_status['total_cards']} cards",
+                "progress": 100,
+                "last_updated": datetime.now().isoformat()
+            })
+            
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Error during initialization: {error_msg}", exc_info=True)
@@ -124,8 +142,9 @@ def initialize_database():
             "error": error_msg
         })
 
-# Initialize database when the module loads
-initialize_database()
+@app.before_first_request
+def init_db():
+    initialize_database()
 
 @app.route('/db-status')
 def get_db_status():
@@ -148,7 +167,7 @@ def search():
     if not query:
         return jsonify([])
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT card_data FROM cards 
@@ -156,8 +175,6 @@ def search():
     """, (f'%{query}%', f'%{query}%'))
     
     results = cursor.fetchall()
-    conn.close()
-    
     cards = [json.loads(row[0]) for row in results]
     return jsonify(cards)
 
@@ -174,11 +191,10 @@ def get_card_image(card_id):
         )
     
     # Get image URL from database
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT image_url FROM cards WHERE id=?", (card_id,))
     result = cursor.fetchone()
-    conn.close()
     
     if not result:
         return "Card not found", 404
