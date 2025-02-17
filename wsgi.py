@@ -1,11 +1,8 @@
-from main import app, initialize_database, update_database, download_card_images
+from main import app, initialize_database
+from threading import Thread
 
-# Initialize the database when the WSGI application starts
-print("Starting database initialization...")
-initialize_database()
-update_database()
-download_card_images()
-print("Database initialization complete!")
+# Initialize database in background
+Thread(target=initialize_database, daemon=True).start()
 
 # Export the Flask application
 application = app
