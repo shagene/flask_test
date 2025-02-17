@@ -135,11 +135,46 @@
             debounceTimeout = setTimeout(func, delay);
         }
 
+        function checkDatabaseStatus() {
+            fetch('/db-status')
+                .then(response => response.json())
+                .then(status => {
+                    const loadingStatus = document.getElementById('loading-status');
+                    const loadingOverlay = document.getElementById('loading-overlay');
+                    const progressBar = document.getElementById('progress-bar');
+                    
+                    loadingStatus.textContent = status.message;
+                    
+                    if (status.state === 'downloading' && status.total_images > 0) {
+                        const progress = (status.current_image / status.total_images) * 100;
+                        progressBar.style.width = `${progress}%`;
+                    }
+                    
+                    if (status.state === 'ready') {
+                        loadingOverlay.style.opacity = '0';
+                        setTimeout(() => {
+                            loadingOverlay.style.display = 'none';
+                        }, 1000);
+                    } else {
+                        setTimeout(checkDatabaseStatus, 1000);
+                    }
+                });
+        }
+
+        // Start checking status when page loads
+        document.addEventListener('DOMContentLoaded', checkDatabaseStatus);
+
         async function searchCards() {
             debounce(async () => {
                 const query = document.getElementById('searchInput').value;
                 if (!query.trim()) return;
+                
                 const response = await fetch(`/search?query=${query}`);
+                if (response.status === 503) {
+                    // Database not ready
+                    return;
+                }
+                
                 const cards = await response.json();
                 const resultsDiv = document.getElementById('results');
                 resultsDiv.innerHTML = '';
@@ -152,7 +187,7 @@
                     cardElement.onclick = () => addCardToStep(card.id, card.name);
                     resultsDiv.appendChild(cardElement);
                 });
-            }, 600); 
+            }, 600);
         }
 
         async function addCardToStep(cardId, cardName) {
@@ -314,5 +349,37 @@
     <button onclick="exportSteps()">💾 Save Steps</button>
     <input type="file" onchange="importSteps(event)">
     <div id="steps"></div>
+    <div id="loading-overlay" style="
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.9);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        color: #F1F1F1;
+    ">
+        <div style="text-align: center;">
+            <h2 id="loading-status" style="margin-bottom: 20px;">Initializing Database...</h2>
+            <div id="loading-progress" style="
+                width: 300px;
+                height: 4px;
+                background: #3C3D40;
+                border-radius: 2px;
+                overflow: hidden;
+            ">
+                <div id="progress-bar" style="
+                    width: 0%;
+                    height: 100%;
+                    background: #F1F1F1;
+                    transition: width 0.3s ease;
+                "></div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

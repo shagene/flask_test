@@ -4,14 +4,26 @@ import requests
 from tqdm import tqdm
 from flask import Flask, render_template, request, jsonify
 import json
+from threading import Thread
 
 DB_PATH = "yugioh_cards.db"
 IMAGES_DIR = "static/card_images"
 app = Flask(__name__)
 
+# Add global status tracking
+db_status = {
+    "state": "not_started",  # not_started, initializing, updating, downloading, ready
+    "total_images": 0,
+    "current_image": 0,
+    "message": "Database not initialized"
+}
+
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
 def initialize_database():
+    global db_status
+    db_status["state"] = "initializing"
+    db_status["message"] = "Initializing database..."
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -25,10 +37,11 @@ def initialize_database():
     ''')
     conn.commit()
     conn.close()
-    print("✅ Database initialized successfully.")
 
 def update_database():
-    print("📥 Checking for new cards...")
+    global db_status
+    db_status["state"] = "updating"
+    db_status["message"] = "Updating card database..."
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     response = requests.get('https://db.ygoprodeck.com/api/v7/cardinfo.php')
@@ -44,29 +57,44 @@ def update_database():
                 ''', (card['id'], card['name'], card['type'], card['desc'], card_data))
         conn.commit()
         conn.close()
-        print("✅ Database update completed!")
-    else:
-        print("❌ Failed to fetch card data from API.")
 
 def download_card_images():
+    global db_status
+    db_status["state"] = "downloading"
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT id, card_data FROM cards")
     cards = cursor.fetchall()
     conn.close()
-    print("📸 Downloading missing card images...")
+
     missing_images = [
         (card_id, json.loads(card_data)['card_images'][0]['image_url'])
         for card_id, card_data in cards
         if not os.path.exists(f"{IMAGES_DIR}/{card_id}.jpg")
     ]
 
-    for card_id, image_url in tqdm(missing_images, desc="Downloading Images", unit="card"):
+    db_status["total_images"] = len(missing_images)
+    db_status["current_image"] = 0
+    
+    for card_id, image_url in missing_images:
         image_path = os.path.join(IMAGES_DIR, f"{card_id}.jpg")
         response = requests.get(image_url)
         with open(image_path, 'wb') as f:
             f.write(response.content)
-    print("✅ Image download completed!")
+        db_status["current_image"] += 1
+        db_status["message"] = f"Downloading images ({db_status['current_image']}/{db_status['total_images']})"
+
+    db_status["state"] = "ready"
+    db_status["message"] = "Database ready"
+
+def init_db_async():
+    initialize_database()
+    update_database()
+    download_card_images()
+
+@app.route('/db-status')
+def get_db_status():
+    return jsonify(db_status)
 
 @app.route('/')
 def index():
@@ -74,6 +102,9 @@ def index():
 
 @app.route('/search')
 def search():
+    if db_status["state"] != "ready":
+        return jsonify({"error": "Database not ready"}), 503
+    
     query = request.args.get('query')
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -101,9 +132,8 @@ def get_card_image(card_id):
         return jsonify({"error": "Card not found"}), 404
 
 if __name__ == "__main__":
-    initialize_database()
-    update_database()
-    download_card_images()
-    # Use PORT provided by Render
+    # Start database initialization in background
+    Thread(target=init_db_async, daemon=True).start()
+    
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
